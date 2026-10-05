@@ -1,0 +1,172 @@
+from __future__ import annotations
+import hashlib, os, sqlite3, uuid
+from pathlib import Path
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
+
+APP_VERSION="0.1.0"
+ROOT=Path(os.environ.get("PHONE_VAULT_ROOT", Path(__file__).resolve().parents[2]/"runtime")).resolve()
+STORAGE=ROOT/"storage"
+DB_PATH=ROOT/"db"/"phone-vault.sqlite3"
+CHUNK_SIZE=4*1024*1024
+app=FastAPI(title="Phone Vault",version=APP_VERSION)
+
+def db():
+    ROOT.joinpath("db").mkdir(parents=True,exist_ok=True)
+    c=sqlite3.connect(DB_PATH)
+    c.row_factory=sqlite3.Row
+    return c
+
+def init_db():
+    with db() as c:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,name TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,last_seen TEXT);
+        CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY,device_id TEXT NOT NULL,original_path TEXT NOT NULL,stored_path TEXT NOT NULL,filename TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL,mime_type TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE INDEX IF NOT EXISTS idx_files_device ON files(device_id);
+        CREATE INDEX IF NOT EXISTS idx_files_sha256 ON files(sha256);
+        CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY,device_id TEXT NOT NULL,filename TEXT NOT NULL,source_path TEXT NOT NULL,size INTEGER NOT NULL,expected_sha256 TEXT,mime_type TEXT,received_bytes INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,temp_path TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        """)
+
+@app.on_event("startup")
+def startup():
+    init_db()
+    STORAGE.mkdir(parents=True,exist_ok=True)
+
+@app.get("/api/v1/health")
+def health():
+    return {"status":"ok","version":APP_VERSION}
+
+class PairRequest(BaseModel):
+    name:str=Field(min_length=1,max_length=100)
+
+@app.post("/api/v1/devices/pair")
+def pair(req:PairRequest):
+    device_id=uuid.uuid4().hex
+    with db() as c:
+        c.execute("INSERT INTO devices(id,name) VALUES(?,?)",(device_id,req.name))
+    return {"device_id":device_id,"name":req.name}
+
+class UploadRequest(BaseModel):
+    device_id:str
+    filename:str=Field(min_length=1,max_length=255)
+    source_path:str=""
+    size:int=Field(ge=0)
+    sha256:str|None=Field(default=None,min_length=64,max_length=64)
+    mime_type:str|None=None
+
+def safe_name(name:str)->str:
+    n=Path(name.replace("\\","/")).name
+    if not n or n in {".",".."}:
+        raise HTTPException(400,"invalid filename")
+    return n
+
+@app.post("/api/v1/uploads")
+def create_upload(req:UploadRequest):
+    with db() as c:
+        if c.execute("SELECT 1 FROM devices WHERE id=?",(req.device_id,)).fetchone() is None:
+            raise HTTPException(404,"unknown device")
+    filename=safe_name(req.filename)
+    upload_id=uuid.uuid4().hex
+    temp_dir=ROOT/"incoming"
+    temp_dir.mkdir(parents=True,exist_ok=True)
+    temp=temp_dir/f"{upload_id}.part"
+    with db() as c:
+        c.execute("INSERT INTO uploads(id,device_id,filename,source_path,size,expected_sha256,mime_type,status,temp_path) VALUES(?,?,?,?,?,?,?,?,?)",
+                  (upload_id,req.device_id,filename,req.source_path,req.size,req.sha256,req.mime_type,"uploading",str(temp)))
+    temp.touch()
+    return {"upload_id":upload_id,"chunk_size":CHUNK_SIZE,"received_bytes":0,"status":"uploading"}
+
+@app.get("/api/v1/uploads/{upload_id}")
+def upload_status(upload_id:str):
+    with db() as c:
+        row=c.execute("SELECT * FROM uploads WHERE id=?",(upload_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404,"upload not found")
+    return {"upload_id":upload_id,"status":row["status"],"received_bytes":row["received_bytes"],"size":row["size"]}
+
+@app.put("/api/v1/uploads/{upload_id}/chunks/{chunk_number}")
+async def upload_chunk(upload_id:str,chunk_number:int,request:Request):
+    if chunk_number<0:
+        raise HTTPException(400,"invalid chunk number")
+    with db() as c:
+        row=c.execute("SELECT * FROM uploads WHERE id=?",(upload_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404,"upload not found")
+    if row["status"]!="uploading":
+        raise HTTPException(409,f"upload is {row['status']}")
+    expected=row["received_bytes"]
+    hdr=request.headers.get("X-Upload-Offset")
+    if hdr is not None and int(hdr)!=expected:
+        return JSONResponse(status_code=409,content={"error":"offset_mismatch","received_bytes":expected})
+    data=await request.body()
+    if not data:
+        raise HTTPException(400,"empty chunk")
+    if expected+len(data)>row["size"]:
+        raise HTTPException(413,"chunk exceeds declared size")
+    with open(row["temp_path"],"ab") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    received=expected+len(data)
+    with db() as c:
+        c.execute("UPDATE uploads SET received_bytes=? WHERE id=?",(received,upload_id))
+    return {"upload_id":upload_id,"chunk_number":chunk_number,"received_bytes":received,"status":"uploading"}
+
+@app.post("/api/v1/uploads/{upload_id}/complete")
+def complete_upload(upload_id:str):
+    with db() as c:
+        row=c.execute("SELECT * FROM uploads WHERE id=?",(upload_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404,"upload not found")
+    if row["received_bytes"]!=row["size"]:
+        raise HTTPException(409,detail={"error":"incomplete","received_bytes":row["received_bytes"],"size":row["size"]})
+    with db() as c:
+        c.execute("UPDATE uploads SET status='verifying' WHERE id=?",(upload_id,))
+    h=hashlib.sha256()
+    with open(row["temp_path"],"rb") as f:
+        for block in iter(lambda:f.read(1024*1024),b""):
+            h.update(block)
+    digest=h.hexdigest()
+    if row["expected_sha256"] and digest.lower()!=row["expected_sha256"].lower():
+        with db() as c:
+            c.execute("UPDATE uploads SET status='failed' WHERE id=?",(upload_id,))
+        raise HTTPException(422,detail={"error":"sha256_mismatch","actual":digest})
+    destination=STORAGE/"devices"/row["device_id"]/row["filename"]
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    if destination.exists():
+        destination=destination.with_name(f"{destination.stem}-{upload_id[:8]}{destination.suffix}")
+    os.replace(row["temp_path"],destination)
+    file_id=uuid.uuid4().hex
+    with db() as c:
+        c.execute("INSERT INTO files(id,device_id,original_path,stored_path,filename,size,sha256,mime_type) VALUES(?,?,?,?,?,?,?,?)",
+                  (file_id,row["device_id"],row["source_path"],str(destination),row["filename"],row["size"],digest,row["mime_type"]))
+        c.execute("UPDATE uploads SET status='complete' WHERE id=?",(upload_id,))
+    return {"upload_id":upload_id,"file_id":file_id,"sha256":digest,"status":"complete"}
+
+@app.get("/api/v1/files")
+def list_files(limit:int=Query(100,ge=1,le=1000),offset:int=Query(0,ge=0)):
+    with db() as c:
+        rows=c.execute("SELECT id,device_id,original_path,filename,size,sha256,mime_type,created_at FROM files ORDER BY created_at DESC LIMIT ? OFFSET ?",(limit,offset)).fetchall()
+    return {"items":[dict(r) for r in rows],"limit":limit,"offset":offset}
+
+@app.get("/api/v1/files/{file_id}/content")
+def file_content(file_id:str):
+    with db() as c:
+        row=c.execute("SELECT filename,stored_path FROM files WHERE id=?",(file_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404,"file not found")
+    path=Path(row["stored_path"]).resolve()
+    if not path.is_relative_to(STORAGE):
+        raise HTTPException(500,"invalid storage path")
+    if not path.is_file():
+        raise HTTPException(404,"stored file missing")
+    return FileResponse(path,filename=row["filename"])
+
+@app.get("/api/v1/files/{file_id}")
+def file_info(file_id:str):
+    with db() as c:
+        row=c.execute("SELECT * FROM files WHERE id=?",(file_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404,"file not found")
+    return dict(row)
