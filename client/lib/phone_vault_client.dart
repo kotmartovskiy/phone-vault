@@ -27,9 +27,10 @@ class PhoneVaultClient{
   final Uri baseUri;
   final http.Client _http;
   String? token;
-  PhoneVaultClient(String baseUrl,{http.Client? client,this.token}):baseUri=Uri.parse(baseUrl.endsWith('/')?baseUrl:'$baseUrl/'),_http=client??http.Client();
+  String? deviceId;
+  PhoneVaultClient(String baseUrl,{http.Client? client,this.token,this.deviceId}):baseUri=Uri.parse(baseUrl.endsWith('/')?baseUrl:'$baseUrl/'),_http=client??http.Client();
   Uri _uri(String path)=>baseUri.resolve(path);
-  Map<String,String> _headers([Map<String,String>? extra])=>{if(token!=null)'authorization':'Bearer $token',...?extra};
+  Map<String,String> _headers([Map<String,String>? extra])=>{if(token!=null)'authorization':'Bearer $token',if(deviceId!=null)'X-Device-ID':deviceId!,...?extra};
 
   Future<bool> health()async{
     final response=await _http.get(_uri('api/v1/health'));

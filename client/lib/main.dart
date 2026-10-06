@@ -52,7 +52,7 @@ class _VaultHomeState extends State<VaultHome>{
     setState((){_busy=true;_status='Checking server...';});
     try{
       final url=_server.text.trim();
-      final client=PhoneVaultClient(url,token:_token);
+      final client=PhoneVaultClient(url,token:_token,deviceId:_deviceId);
       if(!await client.health())throw StateError('Server health check failed');
       _client?.close();_client=client;await _prefs?.setString('server',url);
       setState(()=>_status='Server is reachable');
@@ -67,10 +67,12 @@ class _VaultHomeState extends State<VaultHome>{
     try{
       final pair=await client.pair(_name.text.trim().isEmpty?'My Phone':_name.text.trim());
       _token=pair.token;
+      _deviceId=pair.deviceId;
       client.token=pair.token;
+      client.deviceId=pair.deviceId;
       await _prefs?.setString('device_id',pair.deviceId);
       await _prefs?.setString('token',pair.token);
-      setState((){_deviceId=pair.deviceId;_status='Paired successfully; token stored securely in app preferences';});
+      setState((){_deviceId=pair.deviceId;_status='Paired successfully; token saved locally';});
     }catch(e){setState(()=>_status='Pairing error: $e');}
     finally{if(mounted)setState(()=>_busy=false);}
   }

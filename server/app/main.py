@@ -21,9 +21,13 @@ async def auth_middleware(request:Request,call_next):
         return JSONResponse(status_code=401,content={"error":"authentication_required"})
     token=authorization[7:].strip()
     with db() as c:
-        ok=c.execute("SELECT 1 FROM devices WHERE token_hash=?",(_token_hash(token),)).fetchone() is not None
-    if not ok:
+        row=c.execute("SELECT id FROM devices WHERE token_hash=?",(_token_hash(token),)).fetchone()
+    if row is None:
         return JSONResponse(status_code=401,content={"error":"invalid_token"})
+    device_id=request.headers.get("X-Device-ID")
+    if device_id != row["id"]:
+        return JSONResponse(status_code=403,content={"error":"device_mismatch"})
+    request.state.device_id=row["id"]
     return await call_next(request)
 
 def db():
@@ -102,7 +106,9 @@ def upload_json(row):
     return {"upload_id":row["id"],"chunk_size":CHUNK_SIZE,"received_bytes":row["received_bytes"],"size":row["size"],"status":row["status"]}
 
 @app.post("/api/v1/uploads")
-def create_upload(req:UploadRequest):
+def create_upload(req:UploadRequest,request:Request):
+    if req.device_id != request.state.device_id:
+        raise HTTPException(403,"device mismatch")
     with db() as c:
         if c.execute("SELECT 1 FROM devices WHERE id=?",(req.device_id,)).fetchone() is None:
             raise HTTPException(404,"unknown device")
@@ -118,12 +124,14 @@ def create_upload(req:UploadRequest):
     return {"upload_id":upload_id,"chunk_size":CHUNK_SIZE,"received_bytes":0,"size":req.size,"status":"uploading"}
 
 @app.post("/api/v1/uploads/resume")
-def resume_upload(req:UploadRequest):
+def resume_upload(req:UploadRequest,request:Request):
+    if req.device_id != request.state.device_id:
+        raise HTTPException(403,"device mismatch")
     filename=safe_name(req.filename)
     with db() as c:
         row=c.execute(
-            "SELECT * FROM uploads WHERE filename=? AND size=? AND expected_sha256=? AND status='uploading' ORDER BY created_at DESC LIMIT 1",
-            (filename,req.size,req.sha256)
+            "SELECT * FROM uploads WHERE device_id=? AND filename=? AND size=? AND expected_sha256=? AND status='uploading' ORDER BY created_at DESC LIMIT 1",
+            (request.state.device_id,filename,req.size,req.sha256)
         ).fetchone()
     if row is not None:
         temp=Path(row["temp_path"])
@@ -137,10 +145,12 @@ def resume_upload(req:UploadRequest):
     return create_upload(req)
 
 @app.get("/api/v1/uploads/{upload_id}")
-def upload_status(upload_id:str):
+def upload_status(upload_id:str,request:Request):
     with db() as c:
         row=c.execute("SELECT * FROM uploads WHERE id=?",(upload_id,)).fetchone()
     if row is None:
+        raise HTTPException(404,"upload not found")
+    if row["device_id"] != request.state.device_id:
         raise HTTPException(404,"upload not found")
     temp=Path(row["temp_path"])
     actual=temp.stat().st_size if temp.exists() else 0
@@ -158,6 +168,8 @@ async def upload_chunk(upload_id:str,chunk_number:int,request:Request):
     with db() as c:
         row=c.execute("SELECT * FROM uploads WHERE id=?",(upload_id,)).fetchone()
     if row is None:
+        raise HTTPException(404,"upload not found")
+    if row["device_id"] != request.state.device_id:
         raise HTTPException(404,"upload not found")
     if row["status"]!="uploading":
         raise HTTPException(409,f"upload is {row['status']}")
@@ -180,10 +192,12 @@ async def upload_chunk(upload_id:str,chunk_number:int,request:Request):
     return {"upload_id":upload_id,"chunk_number":chunk_number,"received_bytes":received,"status":"uploading"}
 
 @app.post("/api/v1/uploads/{upload_id}/complete")
-def complete_upload(upload_id:str):
+def complete_upload(upload_id:str,request:Request):
     with db() as c:
         row=c.execute("SELECT * FROM uploads WHERE id=?",(upload_id,)).fetchone()
     if row is None:
+        raise HTTPException(404,"upload not found")
+    if row["device_id"] != request.state.device_id:
         raise HTTPException(404,"upload not found")
     if row["received_bytes"]!=row["size"]:
         raise HTTPException(409,detail={"error":"incomplete","received_bytes":row["received_bytes"],"size":row["size"]})
@@ -211,15 +225,15 @@ def complete_upload(upload_id:str):
     return {"upload_id":upload_id,"file_id":file_id,"sha256":digest,"status":"complete"}
 
 @app.get("/api/v1/files")
-def list_files(limit:int=Query(100,ge=1,le=1000),offset:int=Query(0,ge=0)):
+def list_files(request:Request,limit:int=Query(100,ge=1,le=1000),offset:int=Query(0,ge=0)):
     with db() as c:
-        rows=c.execute("SELECT id,device_id,original_path,filename,size,sha256,mime_type,created_at FROM files ORDER BY created_at DESC LIMIT ? OFFSET ?",(limit,offset)).fetchall()
+        rows=c.execute("SELECT id,device_id,original_path,filename,size,sha256,mime_type,created_at FROM files WHERE device_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",(request.state.device_id,limit,offset)).fetchall()
     return {"items":[dict(r) for r in rows],"limit":limit,"offset":offset}
 
 @app.get("/api/v1/files/{file_id}/content")
-def file_content(file_id:str):
+def file_content(file_id:str,request:Request):
     with db() as c:
-        row=c.execute("SELECT filename,stored_path FROM files WHERE id=?",(file_id,)).fetchone()
+        row=c.execute("SELECT filename,stored_path,device_id FROM files WHERE id=? AND device_id=?",(file_id,request.state.device_id)).fetchone()
     if row is None: raise HTTPException(404,"file not found")
     path=Path(row["stored_path"]).resolve()
     if not path.is_relative_to(STORAGE): raise HTTPException(500,"invalid storage path")
@@ -227,8 +241,8 @@ def file_content(file_id:str):
     return FileResponse(path,filename=row["filename"])
 
 @app.get("/api/v1/files/{file_id}")
-def file_info(file_id:str):
+def file_info(file_id:str,request:Request):
     with db() as c:
-        row=c.execute("SELECT * FROM files WHERE id=?",(file_id,)).fetchone()
+        row=c.execute("SELECT * FROM files WHERE id=? AND device_id=?",(file_id,request.state.device_id)).fetchone()
     if row is None: raise HTTPException(404,"file not found")
     return dict(row)
