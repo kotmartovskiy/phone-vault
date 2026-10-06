@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'phone_vault_client.dart';
 import 'file_explorer.dart';
@@ -35,6 +36,7 @@ class _VaultHomeState extends State<VaultHome> {
   bool _busy = false;
   bool _cancelRequested = false;
   SharedPreferences? _prefs;
+  static const _secure = MethodChannel('phone_vault/secure_storage');
 
   @override
   void initState() {
@@ -47,7 +49,15 @@ class _VaultHomeState extends State<VaultHome> {
     _prefs = p;
     final savedServer = p.getString('server');
     final savedDevice = p.getString('device_id');
-    final savedToken = p.getString('token');
+    String? savedToken = await _secure.invokeMethod<String>('readToken');
+    if (savedToken == null || savedToken.isEmpty) {
+      final legacy = p.getString('token');
+      if (legacy != null && legacy.isNotEmpty) {
+        savedToken = legacy;
+        await _secure.invokeMethod<bool>('writeToken', {'token': legacy});
+        await p.remove('token');
+      }
+    }
     if (mounted) {
       setState(() {
         if (savedServer != null && savedServer.isNotEmpty)
@@ -109,7 +119,8 @@ class _VaultHomeState extends State<VaultHome> {
       client.token = pair.token;
       client.deviceId = pair.deviceId;
       await _prefs?.setString('device_id', pair.deviceId);
-      await _prefs?.setString('token', pair.token);
+      await _secure.invokeMethod<bool>('writeToken', {'token': pair.token});
+      await _prefs?.remove('token');
       setState(() {
         _deviceId = pair.deviceId;
         _status = 'Paired successfully; token saved locally';

@@ -4,15 +4,26 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.nio.charset.StandardCharsets
+import java.security.KeyStore
+import android.util.Base64
 import java.util.Locale
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 class MainActivity : FlutterActivity() {
     private var permissionResult: MethodChannel.Result? = null
     private val permissionRequestCode = 4107
+    private val secureChannel = "phone_vault/secure_storage"
+    private val keyAlias = "phone_vault_token_key"
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -50,6 +61,63 @@ class MainActivity : FlutterActivity() {
                 result.success(indexFiles())
             } else result.notImplemented()
         }
+
+        MethodChannel(engine.dartExecutor.binaryMessenger, secureChannel).setMethodCallHandler { call, result ->
+            try {
+                when (call.method) {
+                    "writeToken" -> {
+                        val token = call.argument<String>("token")
+                        require(!token.isNullOrEmpty()) { "token is empty" }
+                        getSharedSecret().let { key ->
+                            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                            cipher.init(Cipher.ENCRYPT_MODE, key)
+                            val ciphertext = cipher.doFinal(token.toByteArray(StandardCharsets.UTF_8))
+                            val encoded = Base64.encodeToString(cipher.iv + ciphertext, Base64.NO_WRAP)
+                            getPreferences(MODE_PRIVATE).edit().putString("secure_token", encoded).apply()
+                        }
+                        result.success(true)
+                    }
+                    "readToken" -> {
+                        val encoded = getPreferences(MODE_PRIVATE).getString("secure_token", null)
+                        if (encoded == null) {
+                            result.success(null)
+                        } else {
+                            val raw = Base64.decode(encoded, Base64.DEFAULT)
+                            require(raw.size > 12) { "invalid secure token" }
+                            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                            cipher.init(Cipher.DECRYPT_MODE, getSharedSecret(), GCMParameterSpec(128, raw.copyOfRange(0, 12)))
+                            val token = cipher.doFinal(raw.copyOfRange(12, raw.size)).toString(StandardCharsets.UTF_8)
+                            result.success(token)
+                        }
+                    }
+                    "deleteToken" -> {
+                        getPreferences(MODE_PRIVATE).edit().remove("secure_token").apply()
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (e: Exception) {
+                result.error("SECURE_STORAGE", e.message, null)
+            }
+        }
+    }
+
+    private fun getSharedSecret(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val existing = store.getKey(keyAlias, null)
+        if (existing is SecretKey) return existing
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                keyAlias,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true)
+                .build()
+        )
+        return generator.generateKey()
     }
 
     private fun indexFiles(): List<Map<String, Any>> {
