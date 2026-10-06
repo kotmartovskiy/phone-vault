@@ -27,6 +27,7 @@ Thumbs.db
 config/local.*
 
 # Runtime
+runtime/
 *.sqlite3
 *.db
 logs/

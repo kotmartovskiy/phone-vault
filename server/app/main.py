@@ -1,16 +1,30 @@
 from __future__ import annotations
-import hashlib, os, sqlite3, uuid
+import hashlib, os, secrets, sqlite3, uuid
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Header
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-APP_VERSION="0.1.0"
+APP_VERSION="0.2.0"
 ROOT=Path(os.environ.get("PHONE_VAULT_ROOT", Path(__file__).resolve().parents[2]/"runtime")).resolve()
 STORAGE=ROOT/"storage"
 DB_PATH=ROOT/"db"/"phone-vault.sqlite3"
 CHUNK_SIZE=4*1024*1024
 app=FastAPI(title="Phone Vault",version=APP_VERSION)
+
+@app.middleware("http")
+async def auth_middleware(request:Request,call_next):
+    if request.url.path in {"/api/v1/health","/api/v1/devices/pair"}:
+        return await call_next(request)
+    authorization=request.headers.get("authorization","")
+    if not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401,content={"error":"authentication_required"})
+    token=authorization[7:].strip()
+    with db() as c:
+        ok=c.execute("SELECT 1 FROM devices WHERE token_hash=?",(_token_hash(token),)).fetchone() is not None
+    if not ok:
+        return JSONResponse(status_code=401,content={"error":"invalid_token"})
+    return await call_next(request)
 
 def db():
     ROOT.joinpath("db").mkdir(parents=True,exist_ok=True)
@@ -21,11 +35,17 @@ def db():
 def init_db():
     with db() as c:
         c.executescript("""
-        CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,name TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,last_seen TEXT);
+        CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,name TEXT NOT NULL,token_hash TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,last_seen TEXT);
+        """)
+        cols={r[1] for r in c.execute("PRAGMA table_info(devices)").fetchall()}
+        if "token_hash" not in cols:
+            c.execute("ALTER TABLE devices ADD COLUMN token_hash TEXT")
+        c.executescript("""
         CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY,device_id TEXT NOT NULL,original_path TEXT NOT NULL,stored_path TEXT NOT NULL,filename TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL,mime_type TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
         CREATE INDEX IF NOT EXISTS idx_files_device ON files(device_id);
         CREATE INDEX IF NOT EXISTS idx_files_sha256 ON files(sha256);
         CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY,device_id TEXT NOT NULL,filename TEXT NOT NULL,source_path TEXT NOT NULL,size INTEGER NOT NULL,expected_sha256 TEXT,mime_type TEXT,received_bytes INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,temp_path TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE INDEX IF NOT EXISTS idx_upload_resume ON uploads(device_id,filename,size,status);
         """)
 
 @app.on_event("startup")
@@ -40,12 +60,29 @@ def health():
 class PairRequest(BaseModel):
     name:str=Field(min_length=1,max_length=100)
 
+def _token_hash(token:str)->str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def require_auth(authorization:str|None=Header(default=None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401,"authentication required")
+    token=authorization[7:].strip()
+    if not token:
+        raise HTTPException(401,"authentication required")
+    with db() as c:
+        row=c.execute("SELECT id FROM devices WHERE token_hash=?",(_token_hash(token),)).fetchone()
+    if row is None:
+        raise HTTPException(401,"invalid token")
+    return row["id"]
+
 @app.post("/api/v1/devices/pair")
 def pair(req:PairRequest):
     device_id=uuid.uuid4().hex
+    token=secrets.token_urlsafe(32)
     with db() as c:
-        c.execute("INSERT INTO devices(id,name) VALUES(?,?)",(device_id,req.name))
-    return {"device_id":device_id,"name":req.name}
+        c.execute("INSERT INTO devices(id,name,token_hash) VALUES(?,?,?)",(device_id,req.name,_token_hash(token)))
+    return {"device_id":device_id,"token":token,"name":req.name}
+
 
 class UploadRequest(BaseModel):
     device_id:str
@@ -61,6 +98,9 @@ def safe_name(name:str)->str:
         raise HTTPException(400,"invalid filename")
     return n
 
+def upload_json(row):
+    return {"upload_id":row["id"],"chunk_size":CHUNK_SIZE,"received_bytes":row["received_bytes"],"size":row["size"],"status":row["status"]}
+
 @app.post("/api/v1/uploads")
 def create_upload(req:UploadRequest):
     with db() as c:
@@ -75,7 +115,26 @@ def create_upload(req:UploadRequest):
         c.execute("INSERT INTO uploads(id,device_id,filename,source_path,size,expected_sha256,mime_type,status,temp_path) VALUES(?,?,?,?,?,?,?,?,?)",
                   (upload_id,req.device_id,filename,req.source_path,req.size,req.sha256,req.mime_type,"uploading",str(temp)))
     temp.touch()
-    return {"upload_id":upload_id,"chunk_size":CHUNK_SIZE,"received_bytes":0,"status":"uploading"}
+    return {"upload_id":upload_id,"chunk_size":CHUNK_SIZE,"received_bytes":0,"size":req.size,"status":"uploading"}
+
+@app.post("/api/v1/uploads/resume")
+def resume_upload(req:UploadRequest):
+    filename=safe_name(req.filename)
+    with db() as c:
+        row=c.execute(
+            "SELECT * FROM uploads WHERE filename=? AND size=? AND expected_sha256=? AND status='uploading' ORDER BY created_at DESC LIMIT 1",
+            (filename,req.size,req.sha256)
+        ).fetchone()
+    if row is not None:
+        temp=Path(row["temp_path"])
+        actual=temp.stat().st_size if temp.exists() else 0
+        if actual!=row["received_bytes"]:
+            with db() as c:
+                c.execute("UPDATE uploads SET received_bytes=? WHERE id=?",(actual,row["id"]))
+            row=dict(row)
+            row["received_bytes"]=actual
+        return upload_json(row)
+    return create_upload(req)
 
 @app.get("/api/v1/uploads/{upload_id}")
 def upload_status(upload_id:str):
@@ -83,7 +142,14 @@ def upload_status(upload_id:str):
         row=c.execute("SELECT * FROM uploads WHERE id=?",(upload_id,)).fetchone()
     if row is None:
         raise HTTPException(404,"upload not found")
-    return {"upload_id":upload_id,"status":row["status"],"received_bytes":row["received_bytes"],"size":row["size"]}
+    temp=Path(row["temp_path"])
+    actual=temp.stat().st_size if temp.exists() else 0
+    if actual!=row["received_bytes"] and row["status"]=="uploading":
+        with db() as c:
+            c.execute("UPDATE uploads SET received_bytes=? WHERE id=?",(actual,upload_id))
+        row=dict(row)
+        row["received_bytes"]=actual
+    return upload_json(row)
 
 @app.put("/api/v1/uploads/{upload_id}/chunks/{chunk_number}")
 async def upload_chunk(upload_id:str,chunk_number:int,request:Request):
@@ -154,19 +220,15 @@ def list_files(limit:int=Query(100,ge=1,le=1000),offset:int=Query(0,ge=0)):
 def file_content(file_id:str):
     with db() as c:
         row=c.execute("SELECT filename,stored_path FROM files WHERE id=?",(file_id,)).fetchone()
-    if row is None:
-        raise HTTPException(404,"file not found")
+    if row is None: raise HTTPException(404,"file not found")
     path=Path(row["stored_path"]).resolve()
-    if not path.is_relative_to(STORAGE):
-        raise HTTPException(500,"invalid storage path")
-    if not path.is_file():
-        raise HTTPException(404,"stored file missing")
+    if not path.is_relative_to(STORAGE): raise HTTPException(500,"invalid storage path")
+    if not path.is_file(): raise HTTPException(404,"stored file missing")
     return FileResponse(path,filename=row["filename"])
 
 @app.get("/api/v1/files/{file_id}")
 def file_info(file_id:str):
     with db() as c:
         row=c.execute("SELECT * FROM files WHERE id=?",(file_id,)).fetchone()
-    if row is None:
-        raise HTTPException(404,"file not found")
+    if row is None: raise HTTPException(404,"file not found")
     return dict(row)
