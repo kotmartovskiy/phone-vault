@@ -175,8 +175,13 @@ async def upload_chunk(upload_id:str,chunk_number:int,request:Request):
         raise HTTPException(409,f"upload is {row['status']}")
     expected=row["received_bytes"]
     hdr=request.headers.get("X-Upload-Offset")
-    if hdr is not None and int(hdr)!=expected:
-        return JSONResponse(status_code=409,content={"error":"offset_mismatch","received_bytes":expected})
+    if hdr is not None:
+        try:
+            offset=int(hdr)
+        except ValueError:
+            raise HTTPException(400,"invalid upload offset")
+        if offset<0 or offset!=expected:
+            return JSONResponse(status_code=409,content={"error":"offset_mismatch","received_bytes":expected})
     data=await request.body()
     if not data:
         raise HTTPException(400,"empty chunk")

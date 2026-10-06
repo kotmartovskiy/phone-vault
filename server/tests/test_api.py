@@ -72,6 +72,38 @@ def test_sha256_mismatch_fails_without_creating_file(tmp_path, monkeypatch):
     assert all(item["filename"] != "bad-hash.bin" for item in files)
 
 
+def test_invalid_offset_is_rejected(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    monkeypatch.setattr(m, "STORAGE", tmp_path / "storage")
+    monkeypatch.setattr(m, "DB_PATH", tmp_path / "db.sqlite3")
+    m.init_db()
+    device = client.post("/api/v1/devices/pair", json={"name": "offset-format"}).json()
+    auth = {"authorization": f"Bearer {device['token']}", "X-Device-ID": device["device_id"]}
+    upload = client.post("/api/v1/uploads", json={"device_id": device["device_id"], "filename": "offset.bin", "size": 3}, headers=auth).json()
+    bad = client.put(f"/api/v1/uploads/{upload['upload_id']}/chunks/0", headers={**auth, "X-Upload-Offset": "abc"}, content=b"abc")
+    assert bad.status_code == 400
+    negative = client.put(f"/api/v1/uploads/{upload['upload_id']}/chunks/0", headers={**auth, "X-Upload-Offset": "-1"}, content=b"abc")
+    assert negative.status_code == 409
+
+
+def test_device_isolation(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    monkeypatch.setattr(m, "STORAGE", tmp_path / "storage")
+    monkeypatch.setattr(m, "DB_PATH", tmp_path / "db.sqlite3")
+    m.init_db()
+    first = client.post("/api/v1/devices/pair", json={"name": "first"}).json()
+    second = client.post("/api/v1/devices/pair", json={"name": "second"}).json()
+    auth1 = {"authorization": f"Bearer {first['token']}", "X-Device-ID": first["device_id"]}
+    auth2 = {"authorization": f"Bearer {second['token']}", "X-Device-ID": second["device_id"]}
+    upload = client.post("/api/v1/uploads", json={"device_id": first["device_id"], "filename": "secret.bin", "size": 3}, headers=auth1).json()
+    forbidden = client.get(f"/api/v1/uploads/{upload['upload_id']}", headers=auth2)
+    assert forbidden.status_code == 404
+    mismatch = client.put(f"/api/v1/uploads/{upload['upload_id']}/chunks/0", headers={**auth2, "X-Upload-Offset": "0"}, content=b"abc")
+    assert mismatch.status_code == 404
+
+
 def test_incomplete_upload_cannot_be_completed(tmp_path, monkeypatch):
     import app.main as m
     monkeypatch.setattr(m, "ROOT", tmp_path)
