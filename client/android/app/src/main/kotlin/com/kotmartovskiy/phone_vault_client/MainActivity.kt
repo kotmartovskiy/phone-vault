@@ -26,9 +26,23 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(engine)
         MethodChannel(engine.dartExecutor.binaryMessenger, "phone_vault/file_index").setMethodCallHandler { call, result ->
             if (call.method == "requestPermission") {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                val permissions = if (Build.VERSION.SDK_INT >= 33) {
+                    arrayOf(
+                        Manifest.permission.READ_MEDIA_IMAGES,
+                        Manifest.permission.READ_MEDIA_VIDEO,
+                        Manifest.permission.READ_MEDIA_AUDIO
+                    )
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                } else {
+                    emptyArray()
+                }
+                val missing = permissions.filter {
+                    checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+                }
+                if (missing.isNotEmpty()) {
                     permissionResult = result
-                    requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), permissionRequestCode)
+                    requestPermissions(missing.toTypedArray(), permissionRequestCode)
                 } else {
                     result.success(true)
                 }

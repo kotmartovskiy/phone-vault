@@ -32,6 +32,33 @@ Android / Desktop Flutter client
 
 The server is independent from the GUI so it can run headless on an SBC.
 
+## Cross-platform and multi-transport architecture
+
+The transfer core must not assume Android or Wi-Fi. Physical transport and transfer protocol are separate layers above a common Transfer Manager.
+
+### Device identity
+
+- `device_id` is a stable internal identity independent of the display name, manufacturer, model or platform.
+- Device metadata may include platform, OS version, manufacturer, model and available capabilities/transports.
+- The server uses the device display name as the default storage folder name, while allowing the user to change that destination independently.
+
+### Supported and planned platforms
+
+The architecture is intended to accommodate Android, iOS/iPhone, BlackBerry, Java ME, Symbian/Nokia, Windows Mobile and Windows CE where the platform capabilities permit it. Legacy platforms may use a native client, a compatible protocol, removable media or a desktop gateway rather than the modern Flutter client.
+
+### Transport layer
+
+Planned transports include:
+
+- Wi-Fi/LAN and Wi-Fi hotspot.
+- Bluetooth Classic (BR/EDR) and BLE, with version/mode capability discovery.
+- USB/cable: MTP, PTP, Mass Storage, ADB, serial and vendor-specific protocols where available.
+- IrDA for legacy devices.
+- WAP/legacy mobile HTTP where applicable.
+- Memory cards, card readers and other removable-media adapters.
+
+For old phones that cannot run the modern client, the Lenovo/desktop side may act as a Communication Gateway. The Transfer Manager above the transport layer remains independent of the physical connection.
+
 ## Repository layout
 
 - server/ — Python/FastAPI server and indexing engine.
