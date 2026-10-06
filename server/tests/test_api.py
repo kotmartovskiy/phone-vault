@@ -9,6 +9,21 @@ def test_health():
     assert r.status_code==200
     assert r.json()["status"]=="ok"
 
+def test_authenticated_api_rejects_missing_and_wrong_credentials(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    monkeypatch.setattr(m, "STORAGE", tmp_path / "storage")
+    monkeypatch.setattr(m, "DB_PATH", tmp_path / "db.sqlite3")
+    m.init_db()
+    device = client.post("/api/v1/devices/pair", json={"name": "auth-test"}).json()
+    missing = client.get("/api/v1/files")
+    assert missing.status_code == 401
+    wrong = client.get("/api/v1/files", headers={"authorization": "Bearer invalid", "X-Device-ID": device["device_id"]})
+    assert wrong.status_code == 401
+    mismatch = client.get("/api/v1/files", headers={"authorization": f"Bearer {device['token']}", "X-Device-ID": "other-device"})
+    assert mismatch.status_code == 403
+
+
 def test_upload_and_resume(tmp_path,monkeypatch):
     import app.main as m
     monkeypatch.setattr(m,"ROOT",tmp_path)
