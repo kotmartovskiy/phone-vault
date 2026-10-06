@@ -104,6 +104,62 @@ def test_device_isolation(tmp_path, monkeypatch):
     assert mismatch.status_code == 404
 
 
+def test_resume_reconciles_actual_partial_size(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    monkeypatch.setattr(m, "STORAGE", tmp_path / "storage")
+    monkeypatch.setattr(m, "DB_PATH", tmp_path / "db.sqlite3")
+    m.init_db()
+    device = client.post("/api/v1/devices/pair", json={"name": "reconcile-test"}).json()
+    auth = {"authorization": f"Bearer {device['token']}", "X-Device-ID": device["device_id"]}
+    payload = b"abcdef"
+    digest = hashlib.sha256(payload).hexdigest()
+    upload = client.post("/api/v1/uploads", json={"device_id": device["device_id"], "filename": "reconcile.bin", "size": 6, "sha256": digest}, headers=auth).json()
+    upload_id = upload["upload_id"]
+    assert client.put(f"/api/v1/uploads/{upload_id}/chunks/0", headers={**auth, "X-Upload-Offset": "0"}, content=b"abc").status_code == 200
+    with m.db() as c:
+        temp_path = c.execute("SELECT temp_path FROM uploads WHERE id=?", (upload_id,)).fetchone()["temp_path"]
+        c.execute("UPDATE uploads SET received_bytes=1 WHERE id=?", (upload_id,))
+    resumed = client.post("/api/v1/uploads/resume", json={"device_id": device["device_id"], "filename": "reconcile.bin", "size": 6, "sha256": digest}, headers=auth)
+    assert resumed.status_code == 200
+    assert resumed.json()["upload_id"] == upload_id
+    assert resumed.json()["received_bytes"] == 3
+    assert temp_path.endswith(".part")
+
+
+def test_path_traversal_is_reduced_to_filename(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    monkeypatch.setattr(m, "STORAGE", tmp_path / "storage")
+    monkeypatch.setattr(m, "DB_PATH", tmp_path / "db.sqlite3")
+    m.init_db()
+    device = client.post("/api/v1/devices/pair", json={"name": "path-test"}).json()
+    auth = {"authorization": f"Bearer {device['token']}", "X-Device-ID": device["device_id"]}
+    upload = client.post("/api/v1/uploads", json={"device_id": device["device_id"], "filename": "../../safe.txt", "size": 4}, headers=auth)
+    assert upload.status_code == 200
+    upload_id = upload.json()["upload_id"]
+    assert client.put(f"/api/v1/uploads/{upload_id}/chunks/0", headers={**auth, "X-Upload-Offset": "0"}, content=b"safe").status_code == 200
+    done = client.post(f"/api/v1/uploads/{upload_id}/complete", headers=auth)
+    assert done.status_code == 200
+    stored = tmp_path / "storage" / "devices" / device["device_id"] / "safe.txt"
+    assert stored.read_bytes() == b"safe"
+
+
+def test_zero_byte_upload_completes(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    monkeypatch.setattr(m, "STORAGE", tmp_path / "storage")
+    monkeypatch.setattr(m, "DB_PATH", tmp_path / "db.sqlite3")
+    m.init_db()
+    device = client.post("/api/v1/devices/pair", json={"name": "empty-test"}).json()
+    auth = {"authorization": f"Bearer {device['token']}", "X-Device-ID": device["device_id"]}
+    digest = hashlib.sha256(b"").hexdigest()
+    upload = client.post("/api/v1/uploads", json={"device_id": device["device_id"], "filename": "empty.bin", "size": 0, "sha256": digest}, headers=auth).json()
+    done = client.post(f"/api/v1/uploads/{upload['upload_id']}/complete", headers=auth)
+    assert done.status_code == 200
+    assert done.json()["sha256"] == digest
+
+
 def test_incomplete_upload_cannot_be_completed(tmp_path, monkeypatch):
     import app.main as m
     monkeypatch.setattr(m, "ROOT", tmp_path)

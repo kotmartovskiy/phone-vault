@@ -130,8 +130,8 @@ def resume_upload(req:UploadRequest,request:Request):
     filename=safe_name(req.filename)
     with db() as c:
         row=c.execute(
-            "SELECT * FROM uploads WHERE device_id=? AND filename=? AND size=? AND expected_sha256=? AND status='uploading' ORDER BY created_at DESC LIMIT 1",
-            (request.state.device_id,filename,req.size,req.sha256)
+            "SELECT * FROM uploads WHERE device_id=? AND filename=? AND size=? AND status='uploading' AND ((expected_sha256 IS NULL AND ? IS NULL) OR expected_sha256=?) ORDER BY created_at DESC LIMIT 1",
+            (request.state.device_id,filename,req.size,req.sha256,req.sha256)
         ).fetchone()
     if row is not None:
         temp=Path(row["temp_path"])
