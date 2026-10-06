@@ -37,3 +37,5 @@ server/phone_vault_server.egg-info/
 server/__pycache__/
 server/**/__pycache__/
 server/.pytest_cache/
+runtime-test/
+.kotlin/
