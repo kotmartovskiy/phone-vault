@@ -50,7 +50,7 @@ class TransferManager {
   }) async {
     final size = await file.length();
     queue.enqueue(TransferTask(
-      id: '${sha256}_${size}',
+      id: '${sha256}_$size',
       sourcePath: file.path,
       filename: filename ?? file.uri.pathSegments.last,
       size: size,
@@ -73,21 +73,23 @@ class TransferManager {
     if (task == null) return null;
     await _save();
 
+    final trustedServer = context.trustedServer!;
+    final target = client.forEndpoint(trustedServer.endpoint);
     try {
       final file = File(task.sourcePath);
       if (!await file.exists()) {
         queue.fail(task.id, 'Source file no longer exists', retryable: false);
       } else {
         final exists =
-            await client.hasStoredFile(sha256: task.sha256, size: task.size);
+            await target.hasStoredFile(sha256: task.sha256, size: task.size);
         if (exists) {
           queue.skip(task.id);
         } else {
-          if (client.deviceId == null) {
+          if (target.deviceId == null) {
             throw StateError('Client is not paired');
           }
-          await client.uploadFile(
-            deviceId: client.deviceId!,
+          await target.uploadFile(
+            deviceId: target.deviceId!,
             file: file,
             sha256: task.sha256,
           );
@@ -96,6 +98,8 @@ class TransferManager {
       }
     } catch (error) {
       queue.fail(task.id, error);
+    } finally {
+      target.close();
     }
 
     await _save();

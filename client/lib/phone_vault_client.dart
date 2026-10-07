@@ -32,12 +32,25 @@ class UploadInfo {
 class PhoneVaultClient {
   final Uri baseUri;
   final http.Client _http;
+  final bool _ownsHttp;
   String? token;
   String? deviceId;
   PhoneVaultClient(String baseUrl,
       {http.Client? client, this.token, this.deviceId})
       : baseUri = Uri.parse(baseUrl.endsWith('/') ? baseUrl : '$baseUrl/'),
-        _http = client ?? http.Client();
+        _http = client ?? http.Client(),
+        _ownsHttp = client == null;
+
+  /// Creates a client for an already trusted endpoint while preserving the
+  /// current device credentials. It shares the HTTP client but does not own
+  /// it, so closing the scoped client leaves the UI client usable.
+  PhoneVaultClient forEndpoint(Uri endpoint) => PhoneVaultClient(
+        endpoint.toString(),
+        client: _http,
+        token: token,
+        deviceId: deviceId,
+      );
+
   Uri _uri(String path) => baseUri.resolve(path);
   Map<String, String> _headers([Map<String, String>? extra]) => {
         if (token != null) 'authorization': 'Bearer $token',
@@ -178,7 +191,9 @@ class PhoneVaultClient {
     return complete(info.uploadId);
   }
 
-  void close() => _http.close();
+  void close() {
+    if (_ownsHttp) _http.close();
+  }
   static void _expect(http.Response response, int expected) {
     if (response.statusCode != expected) {
       throw HttpException(
