@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'phone_vault_client.dart';
 import 'file_explorer.dart';
 import 'native_file_index.dart';
+import 'trusted_server_registry.dart';
 
 void main() => runApp(const PhoneVaultApp());
 
@@ -134,6 +135,19 @@ class _VaultHomeState extends State<VaultHome> {
       client.token = pair.token;
       client.deviceId = pair.deviceId;
       await _prefs?.setString('device_id', pair.deviceId);
+      if (pair.serverId != null && pair.serverId!.isNotEmpty) {
+        final prefs = _prefs;
+        if (prefs != null) {
+          await TrustedServerRegistry(prefs).save(TrustedServer(
+            serverId: pair.serverId!,
+            endpoint: client.baseUri,
+            displayName: _name.text.trim().isEmpty
+                ? 'Phone Vault server'
+                : _name.text.trim(),
+            trustedAt: DateTime.now().toUtc(),
+          ));
+        }
+      }
       await _secure.invokeMethod<bool>('writeToken', {'token': pair.token});
       await _prefs?.remove('token');
       setState(() {

@@ -5,7 +5,8 @@ import 'package:http/http.dart' as http;
 class PairInfo {
   final String deviceId;
   final String token;
-  const PairInfo({required this.deviceId, required this.token});
+  final String? serverId;
+  const PairInfo({required this.deviceId, required this.token, this.serverId});
 }
 
 class UploadInfo {
@@ -57,7 +58,9 @@ class PhoneVaultClient {
     _expect(response, 200);
     final j = jsonDecode(response.body);
     return PairInfo(
-        deviceId: j['device_id'] as String, token: j['token'] as String);
+        deviceId: j['device_id'] as String,
+        token: j['token'] as String,
+        serverId: j['server_id'] as String?);
   }
 
   Future<bool> hasStoredFile(
