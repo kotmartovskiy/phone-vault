@@ -127,3 +127,18 @@ The repository is ahead of the original checkbox roadmap in several areas.
 
 ### Next engineering step
 Build the persistent transfer queue and sync-policy layer as a platform-neutral core first. Android background execution will then become an adapter around that core rather than containing transfer logic itself.
+
+- Persistent queue metadata storage using SharedPreferences, with interrupted `running` tasks recovered as `queued`.
+- Platform-neutral `SyncPolicy` enforcing trusted-server, network, battery and charging conditions before automatic transfer.
+- Platform-neutral `TransferManager` coordinating queue, persistence, policy, deduplication and resumable upload without enabling background execution yet.
+- Flutter client suite: 16 tests passing; debug APK rebuilt successfully after queue/policy/manager changes.
+
+### Intentionally not enabled yet
+- Automatic background backup.
+- Trusted-server discovery/automatic connection.
+- MediaStore/SAF incremental background scanner.
+- Android WorkManager/foreground transfer adapter.
+- Real-phone validation of resume/deduplication. The phone is not touched during the current development phase.
+
+### Next engineering step
+Add a platform adapter boundary for network/server discovery and Android background execution. Keep the queue, policy and transfer manager platform-neutral; only then connect automatic sync to a trusted paired server. Real-phone testing remains deferred.
