@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib, os, secrets, sqlite3, uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request, Header
 from fastapi.responses import FileResponse, JSONResponse
@@ -10,7 +11,14 @@ ROOT=Path(os.environ.get("PHONE_VAULT_ROOT", Path(__file__).resolve().parents[2]
 STORAGE=ROOT/"storage"
 DB_PATH=ROOT/"db"/"phone-vault.sqlite3"
 CHUNK_SIZE=4*1024*1024
-app=FastAPI(title="Phone Vault",version=APP_VERSION)
+
+@asynccontextmanager
+async def lifespan(_app:FastAPI):
+    init_db()
+    STORAGE.mkdir(parents=True,exist_ok=True)
+    yield
+
+app=FastAPI(title="Phone Vault",version=APP_VERSION,lifespan=lifespan)
 
 @app.middleware("http")
 async def auth_middleware(request:Request,call_next):
@@ -51,11 +59,6 @@ def init_db():
         CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY,device_id TEXT NOT NULL,filename TEXT NOT NULL,source_path TEXT NOT NULL,size INTEGER NOT NULL,expected_sha256 TEXT,mime_type TEXT,received_bytes INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,temp_path TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
         CREATE INDEX IF NOT EXISTS idx_upload_resume ON uploads(device_id,filename,size,status);
         """)
-
-@app.on_event("startup")
-def startup():
-    init_db()
-    STORAGE.mkdir(parents=True,exist_ok=True)
 
 @app.get("/api/v1/health")
 def health():

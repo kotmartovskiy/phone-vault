@@ -9,6 +9,17 @@ def test_health():
     assert r.status_code==200
     assert r.json()["status"]=="ok"
 
+
+def test_lifespan_initializes_runtime(tmp_path, monkeypatch):
+    import app.main as m
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    monkeypatch.setattr(m, "STORAGE", tmp_path / "storage")
+    monkeypatch.setattr(m, "DB_PATH", tmp_path / "db.sqlite3")
+    with TestClient(app) as scoped:
+        assert scoped.get("/api/v1/health").status_code == 200
+    assert (tmp_path / "db.sqlite3").exists()
+    assert (tmp_path / "storage").is_dir()
+
 def test_authenticated_api_rejects_missing_and_wrong_credentials(tmp_path, monkeypatch):
     import app.main as m
     monkeypatch.setattr(m, "ROOT", tmp_path)
