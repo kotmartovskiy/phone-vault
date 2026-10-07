@@ -22,7 +22,7 @@ app=FastAPI(title="Phone Vault",version=APP_VERSION,lifespan=lifespan)
 
 @app.middleware("http")
 async def auth_middleware(request:Request,call_next):
-    if request.url.path in {"/api/v1/health","/api/v1/devices/pair"}:
+    if request.url.path in {"/api/v1/health","/api/v1/identity","/api/v1/devices/pair"}:
         return await call_next(request)
     authorization=request.headers.get("authorization","")
     if not authorization.startswith("Bearer "):
@@ -47,8 +47,12 @@ def db():
 def init_db():
     with db() as c:
         c.executescript("""
+        CREATE TABLE IF NOT EXISTS server_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,name TEXT NOT NULL,token_hash TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,last_seen TEXT);
         """)
+        row=c.execute("SELECT value FROM server_meta WHERE key=?",("server_id",)).fetchone()
+        if row is None:
+            c.execute("INSERT INTO server_meta(key,value) VALUES(?,?)",("server_id",uuid.uuid4().hex))
         cols={r[1] for r in c.execute("PRAGMA table_info(devices)").fetchall()}
         if "token_hash" not in cols:
             c.execute("ALTER TABLE devices ADD COLUMN token_hash TEXT")
@@ -60,9 +64,20 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_upload_resume ON uploads(device_id,filename,size,status);
         """)
 
+def get_server_id()->str:
+    with db() as c:
+        row=c.execute("SELECT value FROM server_meta WHERE key=?",("server_id",)).fetchone()
+    if row is None:
+        raise RuntimeError("server identity is not initialized")
+    return row["value"]
+
 @app.get("/api/v1/health")
 def health():
     return {"status":"ok","version":APP_VERSION}
+
+@app.get("/api/v1/identity")
+def identity():
+    return {"server_id":get_server_id(),"version":APP_VERSION}
 
 class PairRequest(BaseModel):
     name:str=Field(min_length=1,max_length=100)
@@ -88,7 +103,7 @@ def pair(req:PairRequest):
     token=secrets.token_urlsafe(32)
     with db() as c:
         c.execute("INSERT INTO devices(id,name,token_hash) VALUES(?,?,?)",(device_id,req.name,_token_hash(token)))
-    return {"device_id":device_id,"token":token,"name":req.name}
+    return {"device_id":device_id,"token":token,"name":req.name,"server_id":get_server_id()}
 
 
 class UploadRequest(BaseModel):
