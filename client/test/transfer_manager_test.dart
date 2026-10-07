@@ -39,7 +39,7 @@ void main() {
     );
 
     final result = await manager.runNext(const SyncContext(
-      trustedServer: false,
+      trustedServer: null,
       network: SyncNetwork.wifi,
       batteryPercent: 100,
       charging: true,

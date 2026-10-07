@@ -4,9 +4,10 @@ import 'persistent_transfer_queue.dart';
 import 'phone_vault_client.dart';
 import 'sync_policy.dart';
 import 'transfer_queue.dart';
+import 'trusted_server_registry.dart';
 
 class SyncContext {
-  final bool trustedServer;
+  final TrustedServer? trustedServer;
   final SyncNetwork network;
   final int batteryPercent;
   final bool charging;
@@ -17,6 +18,8 @@ class SyncContext {
     required this.batteryPercent,
     required this.charging,
   });
+
+  bool get hasTrustedServer => trustedServer != null;
 }
 
 class TransferManager {
@@ -58,7 +61,7 @@ class TransferManager {
 
   Future<TransferTask?> runNext(SyncContext context) async {
     if (!policy.canTransfer(
-      trustedServer: context.trustedServer,
+      trustedServer: context.hasTrustedServer,
       network: context.network,
       batteryPercent: context.batteryPercent,
       charging: context.charging,
