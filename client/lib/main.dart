@@ -49,21 +49,35 @@ class _VaultHomeState extends State<VaultHome> {
     _prefs = p;
     final savedServer = p.getString('server');
     final savedDevice = p.getString('device_id');
-    String? savedToken = await _secure.invokeMethod<String>('readToken');
+    String? savedToken;
+    try {
+      savedToken = await _secure.invokeMethod<String>('readToken');
+    } on PlatformException {
+      savedToken = null;
+    }
     if (savedToken == null || savedToken.isEmpty) {
       final legacy = p.getString('token');
       if (legacy != null && legacy.isNotEmpty) {
-        savedToken = legacy;
-        await _secure.invokeMethod<bool>('writeToken', {'token': legacy});
-        await p.remove('token');
+        try {
+          final migrated =
+              await _secure.invokeMethod<bool>('writeToken', {'token': legacy});
+          if (migrated == true) {
+            savedToken = legacy;
+            await p.remove('token');
+          }
+        } on PlatformException {
+          savedToken = legacy;
+        }
       }
     }
     if (mounted) {
       setState(() {
-        if (savedServer != null && savedServer.isNotEmpty)
+        if (savedServer != null && savedServer.isNotEmpty) {
           _server.text = savedServer;
-        if (savedDevice != null && savedDevice.isNotEmpty)
+        }
+        if (savedDevice != null && savedDevice.isNotEmpty) {
           _deviceId = savedDevice;
+        }
         if (savedToken != null && savedToken.isNotEmpty) {
           _token = savedToken;
           _status = 'Saved pairing available';
@@ -88,8 +102,9 @@ class _VaultHomeState extends State<VaultHome> {
     try {
       final url = _server.text.trim();
       final client = PhoneVaultClient(url, token: _token, deviceId: _deviceId);
-      if (!await client.health())
+      if (!await client.health()) {
         throw StateError('Server health check failed');
+      }
       _client?.close();
       _client = client;
       await _prefs?.setString('server', url);
@@ -166,8 +181,9 @@ class _VaultHomeState extends State<VaultHome> {
           file: file,
           sha256: digest,
           onProgress: (sent, total) {
-            if (mounted)
+            if (mounted) {
               setState(() => _progress = total == 0 ? 1 : sent / total);
+            }
           },
           isCancelled: () => _cancelRequested,
         );

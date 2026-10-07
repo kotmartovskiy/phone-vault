@@ -93,10 +93,11 @@ class PhoneVaultClient {
             _uri('api/v1/uploads/$uploadId/chunks/$chunkNumber'),
             headers: _headers({'X-Upload-Offset': offset.toString()}),
             body: bytes);
-        if (response.statusCode == 409)
+        if (response.statusCode == 409) {
           throw UploadOffsetException(
               offset:
                   (jsonDecode(response.body)['received_bytes'] as num).toInt());
+        }
         _expect(response, 200);
         return UploadInfo.fromJson(jsonDecode(response.body));
       } catch (e) {
@@ -130,8 +131,9 @@ class PhoneVaultClient {
         sha256: sha256,
         mimeType: mimeType);
     var offset = info.receivedBytes;
-    if (offset > length)
+    if (offset > length) {
       throw StateError('Server offset exceeds local file size');
+    }
     var chunkNumber = offset ~/ info.chunkSize;
     final handle = await file.open();
     try {
@@ -165,10 +167,11 @@ class PhoneVaultClient {
 
   void close() => _http.close();
   static void _expect(http.Response response, int expected) {
-    if (response.statusCode != expected)
+    if (response.statusCode != expected) {
       throw HttpException(
           'Phone Vault HTTP ${response.statusCode}: ${response.body}',
           uri: response.request?.url);
+    }
   }
 }
 

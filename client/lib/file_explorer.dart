@@ -33,17 +33,19 @@ class _FileExplorerPageState extends State<FileExplorerPage> {
         throw StateError('Storage access was not granted');
       }
       final files = await NativeFileIndex.listFiles();
-      if (mounted)
+      if (mounted) {
         setState(() {
           _all = files;
           _loading = false;
         });
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = e.toString();
           _loading = false;
         });
+      }
     }
   }
 
@@ -52,16 +54,21 @@ class _FileExplorerPageState extends State<FileExplorerPage> {
     return _all.where((f) {
       if (_category != 'All' && f.category != _category) return false;
       if (_query.isNotEmpty &&
-          !f.name.toLowerCase().contains(_query.toLowerCase())) return false;
+          !f.name.toLowerCase().contains(_query.toLowerCase())) {
+        return false;
+      }
       if (_time == 'Today' &&
-          f.modified.isBefore(DateTime(now.year, now.month, now.day)))
+          f.modified.isBefore(DateTime(now.year, now.month, now.day))) {
         return false;
+      }
       if (_time == '7 days' &&
-          f.modified.isBefore(now.subtract(const Duration(days: 7))))
+          f.modified.isBefore(now.subtract(const Duration(days: 7)))) {
         return false;
+      }
       if (_time == '30 days' &&
-          f.modified.isBefore(now.subtract(const Duration(days: 30))))
+          f.modified.isBefore(now.subtract(const Duration(days: 30)))) {
         return false;
+      }
       return true;
     }).toList()
       ..sort((a, b) => b.modified.compareTo(a.modified));
