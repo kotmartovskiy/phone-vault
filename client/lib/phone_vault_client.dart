@@ -60,6 +60,16 @@ class PhoneVaultClient {
         deviceId: j['device_id'] as String, token: j['token'] as String);
   }
 
+  Future<bool> hasStoredFile(
+      {required String sha256, required int size}) async {
+    final query =
+        Uri(queryParameters: {'sha256': sha256, 'size': '$size'}).query;
+    final response =
+        await _http.get(_uri('api/v1/files/check?$query'), headers: _headers());
+    _expect(response, 200);
+    return jsonDecode(response.body)['exists'] == true;
+  }
+
   Future<UploadInfo> resumeOrCreateUpload(
       {required String deviceId,
       required String filename,

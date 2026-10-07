@@ -176,6 +176,10 @@ class _VaultHomeState extends State<VaultHome> {
         setState(() => _fileName = item.name);
         final digest = await _sha256(file);
         if (_cancelRequested) break;
+        if (await client.hasStoredFile(sha256: digest, size: item.size)) {
+          setState(() => _status = 'Skipped ${item.name}: already stored');
+          continue;
+        }
         await client.uploadFile(
           deviceId: deviceId,
           file: file,

@@ -229,6 +229,12 @@ def complete_upload(upload_id:str,request:Request):
         c.execute("UPDATE uploads SET status='complete' WHERE id=?",(upload_id,))
     return {"upload_id":upload_id,"file_id":file_id,"sha256":digest,"status":"complete"}
 
+@app.get("/api/v1/files/check")
+def check_file(request:Request,sha256:str, size:int=Query(...,ge=0)):
+    with db() as c:
+        row=c.execute("SELECT id,filename,size,sha256 FROM files WHERE device_id=? AND size=? AND lower(sha256)=lower(?) LIMIT 1",(request.state.device_id,size,sha256)).fetchone()
+    return {"exists": row is not None, "file": dict(row) if row is not None else None}
+
 @app.get("/api/v1/files")
 def list_files(request:Request,limit:int=Query(100,ge=1,le=1000),offset:int=Query(0,ge=0)):
     with db() as c:

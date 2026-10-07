@@ -44,6 +44,9 @@ def test_upload_and_resume(tmp_path,monkeypatch):
     assert done.json()["sha256"]==digest
     files=client.get("/api/v1/files",headers=auth).json()["items"]
     assert len(files)==1 and files[0]["filename"]=="hello.txt"
+    check = client.get(f"/api/v1/files/check?sha256={digest}&size={len(payload)}", headers=auth)
+    assert check.status_code == 200
+    assert check.json()["exists"] is True
 
 def test_wrong_resume_offset_does_not_corrupt_upload(tmp_path, monkeypatch):
     import app.main as m
