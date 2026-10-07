@@ -98,3 +98,32 @@ Definition of Done: one Android device can reliably send a selected file to the 
 - AI photo classification.
 - Automatic deletion from phones.
 - Full office-suite editing.
+
+
+## Current implementation status — 2026-10-07
+
+The repository is ahead of the original checkbox roadmap in several areas.
+
+### Verified complete
+- Server pairing and bearer-token authentication.
+- Device-scoped API access.
+- Resumable chunk uploads with offset reconciliation.
+- SHA-256 verification and atomic finalization.
+- Safe filename handling and upload isolation.
+- Custom Flutter file explorer with multi-select, filtering, search and image preview.
+- Android Keystore protection for the pairing token.
+- Content-hash deduplication: a file already stored for the same device, size and SHA-256 is skipped before upload.
+- Server startup migrated to FastAPI lifespan.
+- Automated server API suite: 12 tests passing.
+- Local development branch and local bare Git mirror created.
+
+### Intentionally not enabled yet
+- Automatic background backup.
+- Trusted-server discovery/automatic connection.
+- MediaStore/SAF incremental background scanner.
+- Persistent transfer queue/history.
+- Wi-Fi/charging policies and retry scheduling.
+- Real-phone validation of resume/deduplication. The phone is not touched during the current development phase.
+
+### Next engineering step
+Build the persistent transfer queue and sync-policy layer as a platform-neutral core first. Android background execution will then become an adapter around that core rather than containing transfer logic itself.

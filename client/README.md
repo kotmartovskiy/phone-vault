@@ -5,10 +5,12 @@ The Flutter client provides the first safe end-to-end transfer workflow.
 ## Current MVP
 
 - Connect to a Phone Vault server over the local network.
-- Pair a device.
-- Pick a single file using the native file picker.
-- Upload the file in resumable chunks.
-- Show upload progress.
+- Pair a device with an Android Keystore-protected token.
+- Browse a custom indexed view of supported shared-storage folders.
+- Filter by type, age and filename; multi-select files; preview images.
+- Upload files in resumable chunks with SHA-256 verification.
+- Detect files already stored for the same device by size + SHA-256 and skip them.
+- Show upload progress and allow a safe interruption without modifying the source file.
 - Complete the upload through the server API.
 
 ## Safety contract
