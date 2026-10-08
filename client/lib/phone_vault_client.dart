@@ -9,6 +9,34 @@ class PairInfo {
   const PairInfo({required this.deviceId, required this.token, this.serverId});
 }
 
+class ServerSession {
+  final String serverId;
+  final String version;
+  final String deviceId;
+
+  const ServerSession({
+    required this.serverId,
+    required this.version,
+    required this.deviceId,
+  });
+
+  factory ServerSession.fromJson(Map<String, dynamic> json) {
+    final serverId = json['server_id'];
+    final version = json['version'];
+    final deviceId = json['device_id'];
+    if (serverId is! String || serverId.isEmpty ||
+        version is! String || version.isEmpty ||
+        deviceId is! String || deviceId.isEmpty) {
+      throw const FormatException('Invalid server session');
+    }
+    return ServerSession(
+      serverId: serverId,
+      version: version,
+      deviceId: deviceId,
+    );
+  }
+}
+
 class UploadInfo {
   final String uploadId;
   final int chunkSize;
@@ -74,6 +102,15 @@ class PhoneVaultClient {
         deviceId: j['device_id'] as String,
         token: j['token'] as String,
         serverId: j['server_id'] as String?);
+  }
+
+  Future<ServerSession> session() async {
+    final response = await _http.get(
+      _uri('api/v1/session'),
+      headers: _headers(),
+    );
+    _expect(response, 200);
+    return ServerSession.fromJson(jsonDecode(response.body));
   }
 
   Future<bool> hasStoredFile(

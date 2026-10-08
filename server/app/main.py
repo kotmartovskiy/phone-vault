@@ -79,6 +79,10 @@ def health():
 def identity():
     return {"server_id":get_server_id(),"version":APP_VERSION}
 
+@app.get("/api/v1/session")
+def session(request:Request):
+    return {"server_id":get_server_id(),"version":APP_VERSION,"device_id":request.state.device_id}
+
 class PairRequest(BaseModel):
     name:str=Field(min_length=1,max_length=100)
 
