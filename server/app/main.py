@@ -1,5 +1,10 @@
+
+
+
+
 from __future__ import annotations
 import hashlib, os, secrets, sqlite3, uuid
+from .mdns import MdnsAdvertiser
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request, Header
@@ -16,7 +21,18 @@ CHUNK_SIZE=4*1024*1024
 async def lifespan(_app:FastAPI):
     init_db()
     STORAGE.mkdir(parents=True,exist_ok=True)
-    yield
+    advertiser = None
+    if os.environ.get("PHONE_VAULT_DISABLE_MDNS", "").strip() != "1":
+        advertiser = MdnsAdvertiser(get_server_id(), APP_VERSION, port=int(os.environ.get("PHONE_VAULT_PORT", "8766")))
+        try:
+            advertiser.start()
+        except Exception:
+            advertiser = None
+    try:
+        yield
+    finally:
+        if advertiser is not None:
+            advertiser.stop()
 
 app=FastAPI(title="Phone Vault",version=APP_VERSION,lifespan=lifespan)
 

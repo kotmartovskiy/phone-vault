@@ -1,3 +1,5 @@
+[Reading 178 lines from start (total: 178 lines, 0 remaining)]
+
 package com.kotmartovskiy.phone_vault_client
 
 import android.Manifest
@@ -62,6 +64,16 @@ class MainActivity : FlutterActivity() {
             } else result.notImplemented()
         }
 
+        MethodChannel(engine.dartExecutor.binaryMessenger, "phone_vault/nsd").setMethodCallHandler { call, result ->
+            if (call.method != "discover") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            val serviceType = call.argument<String>("serviceType") ?: "_phone-vault._tcp"
+            val timeoutMs = (call.argument<Number>("timeoutMs")?.toLong() ?: 2000L).coerceIn(500L, 10000L)
+            discoverNsd(serviceType, timeoutMs, result)
+        }
+
         MethodChannel(engine.dartExecutor.binaryMessenger, secureChannel).setMethodCallHandler { call, result ->
             try {
                 when (call.method) {
@@ -99,6 +111,52 @@ class MainActivity : FlutterActivity() {
             } catch (e: Exception) {
                 result.error("SECURE_STORAGE", e.message, null)
             }
+        }
+    }
+
+    private fun discoverNsd(serviceType: String, timeoutMs: Long, result: MethodChannel.Result) {
+        val nsd = getSystemService(NSD_SERVICE) as android.net.nsd.NsdManager
+        val results = mutableListOf<Map<String, Any>>()
+        val lock = Any()
+        var finished = false
+        val handler = android.os.Handler(mainLooper)
+        lateinit var listener: android.net.nsd.NsdManager.DiscoveryListener
+        val finish = Runnable {
+            synchronized(lock) {
+                if (finished) return@Runnable
+                finished = true
+            }
+            try { nsd.stopServiceDiscovery(listener) } catch (_: Exception) {}
+            result.success(results.toList())
+        }
+        listener = object : android.net.nsd.NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(regType: String) {}
+            override fun onServiceFound(serviceInfo: android.net.nsd.NsdServiceInfo) {
+                if (serviceInfo.serviceType != serviceType) return
+                nsd.resolveService(serviceInfo, object : android.net.nsd.NsdManager.ResolveListener {
+                    override fun onResolveFailed(info: android.net.nsd.NsdServiceInfo, errorCode: Int) {}
+                    override fun onServiceResolved(info: android.net.nsd.NsdServiceInfo) {
+                        val host = info.host?.hostAddress ?: return
+                        val port = info.port
+                        synchronized(lock) {
+                            if (!finished && port > 0 && results.none { it["host"] == host && it["port"] == port }) {
+                                results.add(mapOf("host" to host, "port" to port))
+                            }
+                        }
+                    }
+                })
+            }
+            override fun onServiceLost(serviceInfo: android.net.nsd.NsdServiceInfo) {}
+            override fun onDiscoveryStopped(serviceType: String) {}
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { handler.post(finish) }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+        }
+        handler.postDelayed(finish, timeoutMs)
+        try {
+            nsd.discoverServices(serviceType, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (e: Exception) {
+            handler.removeCallbacks(finish)
+            result.error("NSD", e.message, null)
         }
     }
 
@@ -176,3 +234,5 @@ class MainActivity : FlutterActivity() {
         else -> "application/octet-stream"
     }
 }
+
+[executed on device: Lenovo (398cfb14-e310-4397-bd2d-83bbd22b1d3b)]
