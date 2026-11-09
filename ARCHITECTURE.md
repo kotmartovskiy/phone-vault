@@ -2,7 +2,7 @@
 
 ## Product priority
 
-Phone Vault is first a background backup system for Android smartphones. The first useful outcome is that photos and videos are copied incrementally from one or more phones to a user-controlled server without requiring the user to open the app for every transfer. Chat exports and browser bookmarks/favorites are the next priority data classes. Advanced cataloguing, desktop workflows and AI features follow later and must not delay dependable ingestion.
+Phone Vault is first a background backup system for Android smartphones. The first useful outcome is that photos and videos are copied incrementally from one or more phones to a user-controlled server without requiring the user to open the app for every transfer. Contacts backup is another core personal-data source. The client must also provide an authenticated way to browse and view photos/videos already stored on the server. Chat exports and browser bookmarks/favorites follow. Advanced cataloguing, desktop workflows and AI features must not delay dependable ingestion and basic library access.
 
 ## Server
 
@@ -13,11 +13,12 @@ Responsibilities:
 - upload sessions and resumable chunk transfer;
 - idempotent ingestion and integrity verification;
 - file finalization and metadata extraction;
-- media, chat-export and bookmark-snapshot indexing;
+- media, contacts, chat-export and bookmark-snapshot indexing;
 - source provenance and per-device/per-category backup state;
+- authenticated media catalog, thumbnail/preview delivery and on-demand original retrieval;
 - health, audit and future read-only integration API for Ai-gateway.
 
-The server is independent from the GUI and should run headless on PC or ARM/Linux SBC.
+The server is independent from the GUI and should run headless on PC or ARM/Linux SBC in the initial release.
 
 ## Android client
 
@@ -29,12 +30,14 @@ Responsibilities:
 - incremental detection of new/changed photos and videos;
 - durable upload queue and resumable transfer state;
 - WorkManager scheduling and network/battery constraints;
-- visible backup status, errors, last successful run and manual trigger;
+- contacts collection through Android Contacts Provider after explicit permission;
+- user-visible backup status, errors, last successful run and manual trigger;
+- authenticated browsing of server media catalog;
+- thumbnail loading, image viewing and on-demand video playback/streaming;
+- bounded local cache with clear remote/cached state;
 - opt-in source adapters for chat exports and browser bookmarks;
 - user-selected SAF sources where supported;
 - explicit controls for categories, apps, network and charging policies.
-
-The same Flutter codebase may later provide desktop administration, but Android backup reliability takes priority over desktop feature parity.
 
 ## Background execution model
 
@@ -51,18 +54,39 @@ Do not rely on a permanently running Android process, exact alarms or unrestrict
 ## Data-source adapters
 
 ### Photos and videos
+
 Use MediaStore and current Android permission model. Request only the media access needed by selected categories. Handle partial photo/video permissions on newer Android versions. Use content URIs rather than assuming filesystem paths. Record capture timestamp and available dimensions/duration/EXIF as metadata. GPS extraction and backup policy must be explicit.
 
+### Contacts
+
+Use Android Contacts Provider APIs with explicit runtime permission and a user-controlled enable/disable switch. Model both aggregated contacts and underlying raw contacts/account data where accessible; retain source/account provenance and stable provider identifiers without treating them as globally stable across devices. Export a versioned snapshot and normalize supported fields while preserving source data. Contact sync must not silently merge into or overwrite the phone's address book. A future restore/import workflow requires preview, explicit confirmation, conflict policy and a recoverable operation log. Contact data is highly sensitive and excluded from default broad AI retrieval.
+
 ### Chats and messaging data
+
 There is no generic Android API that grants one app unrestricted access to another app's private message database. Initial support is based on user-initiated exports or documented app-supported backup/export mechanisms, imported through a controlled file/document flow. Each app adapter must document format, attachments, timestamps, edits/deletions, group metadata, encryption and completeness limitations.
 
 Notification access may be considered only as a separate, explicitly opt-in, best-effort capture source. It is not a complete chat backup: notifications can be disabled, redacted, grouped, truncated, missed while the device is offline, or omit history and attachments. It must never be described as equivalent to a full conversation export. Do not bypass app sandboxing or encryption.
 
 ### Browser bookmarks/favorites
+
 Treat bookmarks/favorites as a separate source from open tabs and browsing history. Prefer documented browser export/import or supported browser integration. Where no public API exists, allow the user to export or select a bookmark file through Android's document picker. Store snapshots with browser name, device, export timestamp and source metadata. Do not read another browser's private database or extract its credentials. Open-tab capture is a later, separate capability and only where a supported API/export exists.
 
 ### Other files
+
 Downloads, Documents, audio and arbitrary SAF trees are later opt-in source adapters. They must reuse the same queue, transfer, provenance and integrity pipeline.
+
+## Server media library and client viewer
+
+The client obtains a paginated, authenticated catalog with metadata and thumbnail references. Catalog queries support filtering and stable pagination so large libraries do not require loading all records at once. Thumbnails and previews are generated or served with strict size/resource bounds. Original images are fetched on demand; videos may be streamed with HTTP range support where available or downloaded through a resumable path. The client cache is disposable and bounded: eviction never deletes server objects. Remote-only, cached, loading, offline and unavailable states must be visible. The viewer is read-only with respect to backup originals.
+
+## Cross-platform strategy
+
+Keep the HTTP API, protocol schemas, storage model and server/client responsibilities independent of Flutter widgets, Android APIs and CPU-specific implementation details. Android is the first client, and the current Linux/PC server baseline is the first deployment target. Expand only after the core workflow is stable:
+- additional server OS targets and CPU architectures, starting with well-supported Linux x86_64/ARM64 packaging;
+- additional mobile and desktop client OS targets;
+- per-target installers, service management, updates, permissions and recovery procedures.
+
+Use capability negotiation and explicit versioning. A client must discover which server features and source adapters are available rather than assuming parity. Maintain a tested compatibility matrix; unsupported targets must be clearly marked experimental or unsupported. Cross-platform claims require target-specific build, install/upgrade, backup/restore and integration tests.
 
 ## Storage
 
@@ -75,6 +99,7 @@ Suggested layout:
     devices/
       <device-id>/
     imports/
+      contacts/
       chats/
       bookmarks/
   previews/
@@ -95,7 +120,7 @@ Each ingested object or snapshot should include:
 - MIME type, size and relevant media metadata;
 - source creation/capture time when available;
 - ingestion/backup time;
-- export/snapshot time for chats and bookmarks;
+- export/snapshot time for contacts, chats and bookmarks;
 - transfer and indexing state;
 - integrity verification result.
 
@@ -109,8 +134,10 @@ Initial API:
 - upload session creation/status;
 - chunk upload and completion;
 - media/object metadata and search;
+- paginated media catalog, thumbnail/preview retrieval and authenticated original access;
+- contact snapshot import and backup job status;
 - chat-export and bookmark-snapshot import;
-- backup job status and audit.
+- audit.
 
 Upload lifecycle:
 
@@ -125,12 +152,12 @@ Use content identity (cryptographic hash) for exact duplicate detection. Size, f
 ## Future Ai-gateway integration
 
 Phone Vault exposes a narrow, authenticated, read-oriented API for authorized search and retrieval. Ai-gateway may later:
-- search media/chat/bookmark metadata;
+- search media/contact/chat/bookmark metadata;
 - request selected content or bounded excerpts;
 - summarize or classify data under explicit user policy;
 - create user-approved organization suggestions or workflows.
 
-Ai-gateway must not be required for ingestion, must not gain blanket access by default, and must not delete or modify original backup data. Permissions should be scoped by device, category, date range and operation. Raw chat content, GPS and sensitive media require explicit grants.
+Ai-gateway must not be required for ingestion, must not gain blanket access by default, and must not delete or modify original backup data. Permissions should be scoped by device, category, date range and operation. Raw chat content, contacts, GPS and sensitive media require explicit grants.
 
 ## Security boundaries
 
@@ -139,7 +166,7 @@ Ai-gateway must not be required for ingestion, must not gain blanket access by d
 - Paths are canonicalized before filesystem access.
 - Uploaded files remain temporary until verification succeeds.
 - Preview/parsing runs in controlled workers with resource limits.
-- Chat exports, browser data and media metadata are sensitive.
+- Chat exports, contacts, browser data and media metadata are sensitive.
 - No credential extraction from browser profiles or messaging apps.
 - Archive Move/Delete is separate from backup ingestion and requires explicit authorization.
 - Logs must not contain auth secrets or unnecessary message/media contents.
