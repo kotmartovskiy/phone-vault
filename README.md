@@ -1,26 +1,21 @@
-﻿# Phone Vault
+# Phone Vault
 
-Local-first, self-hosted system for transferring, indexing, previewing and organizing files from Android phones to a computer or ARM/Linux single-board computer.
+Local-first, self-hosted Android backup system. Its first priority is reliable **background copying from multiple Android smartphones to a user-controlled server**. The initial backup scope is photos, videos, chat data that can be exported or accessed through explicitly supported mechanisms, and browser bookmarks/favorites. The server stores and indexes the collected data; richer search, analysis, organization and AI-assisted workflows can evolve later alongside Ai-gateway.
 
-## Goals
+## Primary goal
 
-- Android client for photos, videos, Downloads and documents.
-- Cross-platform Flutter client for Windows, Linux/ARM64 and Android.
-- Self-hosted server for PC/SBC.
-- Automatic and manual transfer modes.
-- Resumable, chunked uploads.
-- File integrity verification and deduplication.
-- Local metadata index with fast filtering.
-- Photo/video/document previews.
-- Search by date, size, format, device and GPS metadata.
-- Manual Copy/Move operations to archive folders.
-- Multiple phones connected to one server.
-- No mandatory cloud account or external service.
-- Safe-by-default behavior.
+A phone should back up new and changed user-selected data to the server with minimal manual interaction. Backup is additive and non-destructive: it must never delete or modify the phone's originals.
+
+### First-priority data classes
+1. **Photos and videos** — scan Android MediaStore, detect new/changed media and transfer incrementally in the background.
+2. **Chats and messaging history** — ingest exports and other explicitly supported app-provided backup formats. Each messaging app needs a separately documented adapter and compatibility limits; there is no assumption that Android permits universal access to another app's private chat database.
+3. **Browser bookmarks/favorites** — import supported browser exports or use documented browser capabilities where available. Browser-specific support must be explicit. Bookmarks are distinct from currently open tabs and browser history.
+
+Other file categories (Downloads, Documents, arbitrary SAF folders, audio, app data), advanced indexing, previews, archive rules and AI workflows follow after the core backup path is reliable.
 
 ## Initial architecture
 
-Android / Desktop Flutter client
+Android background backup client
             |
         HTTPS / LAN
             |
@@ -28,35 +23,54 @@ Android / Desktop Flutter client
             |
    SQLite metadata index
             |
-     Local file storage
+   Local file + export storage
+            |
+   Future: Ai-gateway integration
 
-The server is independent from the GUI so it can run headless on an SBC.
+The server is independent from the GUI and can run headless on a PC or ARM/Linux SBC. No mandatory cloud account or external service is required.
+
+## Android background behavior
+
+- Use Android-supported background scheduling (WorkManager) for deferred, retryable synchronization.
+- Respect Doze, battery saver, metered networks, charging/Wi-Fi preferences and OEM background restrictions.
+- Provide a visible status and explain when the OS has deferred work or requires the user to exempt the app from battery optimization.
+- Use a foreground service only for user-visible long-running transfers where current Android rules require it; do not promise uninterrupted always-on execution.
+- Persist scan cursors, upload sessions and verified chunk state so work resumes after process death, reboot or network loss.
+- Keep manual "Back up now" available.
+
+## Server and integrity
+
+- Multiple paired devices with independent identities and revocation.
+- Resumable, chunked uploads; checksums; temporary staging; verification; atomic finalization.
+- Idempotent ingestion and deduplication without relying on filenames.
+- Separate original binary data, metadata, chat exports and bookmark snapshots.
+- Server-side indexing must preserve source device, source application, export time and original timestamps when available.
+
+## Privacy and safety
+
+- Local-first; no mandatory third-party processing.
+- Explicit per-device and per-data-class backup selection.
+- Chat and browser data are sensitive. Collect only with explicit user consent and show exactly which source is enabled.
+- No silent access to other apps' private storage, no bypass of encryption or Android permission boundaries.
+- Automatic backup never deletes source data on the phone.
+- GPS/EXIF and message contents remain on the user's server unless the user separately authorizes later processing.
+- LAN-only does not mean trusted: authentication, scoped device identities, path validation and optional TLS are required.
+
+## Relationship with Ai-gateway
+
+Phone Vault's immediate job is dependable collection and preservation. Ai-gateway integration is a later layer: it may query the Phone Vault index, search permitted content, summarize or classify selected data, and coordinate user-approved workflows. Phone Vault must remain useful without Ai-gateway, and Ai-gateway must not become a prerequisite for backup.
 
 ## Repository layout
 
-- server/ — Python/FastAPI server and indexing engine.
+- server/ — Python/FastAPI API, ingestion and indexing.
 - client/ — Flutter Android/desktop client.
-- docs/ — requirements, architecture and protocol documentation.
+- docs/ — requirements, architecture, protocol, security and backup scope.
 - roadmap/ — staged development plan.
-- tests/ — planned integration and protocol tests.
+- tests/ — protocol, transfer and integration tests.
 
-## Important design constraints
+## Current implementation baseline
 
-Modern Android uses scoped storage. Media should be accessed through MediaStore, while arbitrary files such as other applications' Downloads may require the Storage Access Framework. GPS/EXIF access has explicit permission requirements.
-
-Transfers must support chunks, resume after disconnect, checksums, temporary files, atomic finalization and bounded retry/backoff.
-
-The binary file and its index record are separate. The index stores path, size, timestamps, media type, dimensions, duration, GPS and content hash.
-
-LAN-only does not mean trusted. The server will use authentication, scoped device identities and optional TLS. Destructive operations require explicit user intent.
-
-## Status
-
-Phase 0 — architecture and repository bootstrap.
-
-First implementation milestone:
-
-Android -> LAN -> server -> indexed file
+The repository contains an initial FastAPI server, Flutter client and resumable transfer pipeline. The documented next priority is to turn the existing safe transfer foundation into reliable scheduled Android media backup, then add chat-export and browser-bookmark ingestion. Check the roadmap for acceptance gates; documentation does not imply these capabilities are already implemented.
 
 ## License
 
