@@ -64,13 +64,13 @@ Phone Vault's immediate job is dependable collection and preservation. Ai-gatewa
 
 - server/ — Python/FastAPI API, ingestion and indexing.
 - client/ — Flutter Android/desktop client.
-- docs/ — requirements, architecture, protocol, security and backup scope.
+- docs/ — requirements, architecture, protocol, security and [Android backup scope](docs/ANDROID_BACKUP_SCOPE.md).
 - roadmap/ — staged development plan.
 - tests/ — protocol, transfer and integration tests.
 
 ## Current implementation baseline
 
-The repository contains an initial FastAPI server, Flutter client and resumable transfer pipeline. The documented next priority is to turn the existing safe transfer foundation into reliable scheduled Android media backup, then add chat-export and browser-bookmark ingestion. Check the roadmap for acceptance gates; documentation does not imply these capabilities are already implemented.
+The repository contains an initial FastAPI server, Flutter client and resumable transfer pipeline. The documented next priority is to turn the existing safe transfer foundation into reliable scheduled Android media backup, then add chat-export and browser-bookmark ingestion. Check the [roadmap](ROADMAP.md) and [backup scope](docs/ANDROID_BACKUP_SCOPE.md) for acceptance gates; documentation does not imply these capabilities are already implemented.
 
 ## License
 
